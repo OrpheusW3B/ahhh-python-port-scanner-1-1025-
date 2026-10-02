@@ -47,6 +47,7 @@ def main():
     parser.add_argument("host", nargs="?", help="Target host to scan (e.g. example.com)")
     parser.add_argument("-s", "--start", type=int, default=1, help="Start port (default: 1)")
     parser.add_argument("-e", "--end", type=int, default=1025, help="End port (default: 1025)")
+    parser.add_argument("-P", "--ports", help="Comma-separated ports to scan (e.g. 21,22,80,443). Overrides -s/-e")
     args = parser.parse_args()
 
     if args.site:
@@ -57,14 +58,19 @@ def main():
 
     if not host:
         parser.error("Provide a target host or URL (-S)")
+
+    if args.ports:
+        port_list = [int(p.strip()) for p in args.ports.split(",") if p.strip()]
+    else:
+        port_list = list(range(args.start, args.end + 1))
+
     start = args.start
     end = args.end
-
     for _ in range(N_THREADS):
         t = Thread(target=scan_thread, daemon=True)
         t.start()
 
-    for port in range(start, end + 1):
+    for port in port_list:
         q.put(port)
 
     q.join()
