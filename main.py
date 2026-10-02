@@ -1,53 +1,57 @@
 import argparse
+import asyncio
 import socket
 from urllib.parse import urlparse
 from colorama import init, Fore
-from threading import Thread, Lock
-from queue import Queue
 
 init()
 GREEN = Fore.GREEN
 RESET = Fore.RESET
 GRAY = Fore.LIGHTBLACK_EX
 
-N_THREADS = 200
-q = Queue()
-print_lock = Lock()
-
 open_ports = []
-closed_ports = []
+MAX_CONCURRENT = 5000
 
-def port_scan(port):
-    """Scan a port on the global variable `host`"""
+
+async def scan_port(ip, port):
+    """Scan a single port asynchronously using a non-blocking socket."""
+    loop = asyncio.get_event_loop()
     s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    s.settimeout(0.5)
+    s.setblocking(False)
     try:
-        s.connect((host, port))
-    except:
-        with print_lock:
-            closed_ports.append(port)
-            print(f"{GRAY}[CLOSED] Port {port:5}{RESET}")
+        await asyncio.wait_for(
+            loop.sock_connect(s, (ip, port)),
+            timeout=0.5
+        )
+    except (OSError, asyncio.TimeoutError):
+        pass
     else:
-        with print_lock:
-            open_ports.append(port)
-            print(f"{GREEN}[OPEN]   Port {port:5}{RESET}")
+        open_ports.append(port)
+        print(f"{GREEN}[OPEN]   Port {port:5}{RESET}")
     finally:
         s.close()
 
-def scan_thread():
-    while True:
-        port = q.get()
-        port_scan(port)
-        q.task_done()
+
+async def scan_all(host, ports):
+    """Scan all ports concurrently."""
+    loop = asyncio.get_event_loop()
+    try:
+        addr = await loop.getaddrinfo(host, None, family=socket.AF_INET)
+        ip = addr[0][4][0]
+    except socket.gaierror:
+        print(f"Error: could not resolve {host}")
+        return
+    tasks = [scan_port(ip, port) for port in ports]
+    await asyncio.gather(*tasks)
+
 
 def main():
-    global host
-    parser = argparse.ArgumentParser(description="Basic CLI Port Scanner")
-    parser.add_argument("-S", "--site", help="Target URL to scan (e.g. https://example.com)")
-    parser.add_argument("host", nargs="?", help="Target host to scan (e.g. example.com)")
+    parser = argparse.ArgumentParser(description="Fast Async CLI Port Scanner")
+    parser.add_argument("-S", "--site", help="Target URL (e.g. https://example.com)")
+    parser.add_argument("host", nargs="?", help="Target host (e.g. example.com)")
     parser.add_argument("-s", "--start", type=int, default=1, help="Start port (default: 1)")
     parser.add_argument("-e", "--end", type=int, default=1025, help="End port (default: 1025)")
-    parser.add_argument("-P", "--ports", help="Comma-separated ports to scan (e.g. 21,22,80,443). Overrides -s/-e")
+    parser.add_argument("-P", "--ports", help="Comma-separated ports (e.g. 21,22,80). Overrides -s/-e")
     args = parser.parse_args()
 
     if args.site:
@@ -60,28 +64,18 @@ def main():
         parser.error("Provide a target host or URL (-S)")
 
     if args.ports:
-        port_list = [int(p.strip()) for p in args.ports.split(",") if p.strip()]
+        ports = [int(p.strip()) for p in args.ports.split(",") if p.strip()]
     else:
-        port_list = list(range(args.start, args.end + 1))
+        ports = list(range(args.start, args.end + 1))
 
-    start = args.start
-    end = args.end
-    for _ in range(N_THREADS):
-        t = Thread(target=scan_thread, daemon=True)
-        t.start()
+    print(f"Scanning {host} on {len(ports)} ports...\n")
+    asyncio.run(scan_all(host, ports))
 
-    for port in port_list:
-        q.put(port)
-
-    q.join()
-
+    total = len(ports)
     print(f"\n{GREEN}=== Scan Summary ===")
-    print(f"Open ports:   {len(open_ports)}")
+    print(f"Scanned: {total} | Open: {len(open_ports)}")
     if open_ports:
         print(f"  {open_ports}")
-    if closed_ports:
-        print(f"{GRAY}Closed ports: {len(closed_ports)}")
-        print(f"  {closed_ports}")
     print(f"{RESET}")
 
 
